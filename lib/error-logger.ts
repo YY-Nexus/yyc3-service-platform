@@ -209,20 +209,45 @@ class ErrorLogger {
     return styles[level]
   }
 
+  // Sanitize log data before sending to prevent information disclosure
+  private sanitizeLogForRemote(log: ErrorLog): Partial<ErrorLog> {
+    return {
+      id: log.id,
+      timestamp: log.timestamp,
+      level: log.level,
+      category: log.category,
+      message: log.message,
+      // Don't send full stack trace, userAgent, or sensitive context to remote
+      // Only send sanitized version
+      userId: log.userId,
+      sessionId: log.sessionId,
+    }
+  }
+
   // 发送到远程日志服务
   private async sendToRemoteLogger(log: ErrorLog) {
     try {
       // 这里可以集成真实的日志服务，如 Sentry、LogRocket 等
       if (log.level === "error" || log.level === "warning") {
+        // Sanitize log before sending to prevent information disclosure
+        const sanitizedLog = this.sanitizeLogForRemote(log)
+        
+        // Add timeout to prevent hanging requests
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 5000)
+        
         // 只发送错误和警告到远程服务
         await fetch("/api/logs", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(log),
+          body: JSON.stringify(sanitizedLog),
+          signal: controller.signal,
         }).catch(() => {
           // 静默处理发送失败，避免循环错误
+        }).finally(() => {
+          clearTimeout(timeoutId)
         })
       }
     } catch (error) {
@@ -234,8 +259,24 @@ class ErrorLogger {
   private saveToLocalStorage(log: ErrorLog) {
     try {
       const key = "error_logs"
+      // Sanitize data before storing - remove sensitive information
+      const sanitizedLog = {
+        ...log,
+        // Remove potentially sensitive stack traces and context from localStorage
+        stack: undefined,
+        context: undefined,
+        details: undefined,
+      }
+      
       const existingLogs = JSON.parse(localStorage.getItem(key) || "[]")
-      existingLogs.unshift(log)
+      
+      // Validate existing logs is an array
+      if (!Array.isArray(existingLogs)) {
+        localStorage.setItem(key, JSON.stringify([sanitizedLog]))
+        return
+      }
+      
+      existingLogs.unshift(sanitizedLog)
 
       // 只保留最近的100条日志
       const trimmedLogs = existingLogs.slice(0, 100)

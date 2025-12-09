@@ -73,11 +73,30 @@ class OllamaService {
     return this.availableModels
   }
 
+  // Sanitize and validate messages to prevent injection attacks
+  private sanitizeMessages(messages: ChatMessage[]): ChatMessage[] {
+    return messages.map(msg => ({
+      role: msg.role,
+      content: typeof msg.content === 'string' ? msg.content.substring(0, 10000) : ''
+    }))
+  }
+
   // 发送聊天请求
   async chat(messages: ChatMessage[], model?: string): Promise<string> {
     if (!this.isConnected) {
       throw new Error("Ollama服务未连接，请检查服务状态")
     }
+
+    // Validate input
+    if (!Array.isArray(messages) || messages.length === 0) {
+      throw new Error("无效的消息数组")
+    }
+
+    // Sanitize messages to prevent injection
+    const sanitizedMessages = this.sanitizeMessages(messages)
+
+    // Validate model name to prevent injection
+    const modelName = (model || this.config.model).replace(/[^a-zA-Z0-9:._-]/g, '')
 
     try {
       const response = await fetch(`${this.config.baseUrl}/api/chat`, {
@@ -86,8 +105,8 @@ class OllamaService {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: model || this.config.model,
-          messages,
+          model: modelName,
+          messages: sanitizedMessages,
           stream: false,
           options: {
             temperature: 0.7,
@@ -99,13 +118,24 @@ class OllamaService {
       })
 
       if (!response.ok) {
-        throw new Error(`Ollama请求失败: ${response.status} ${response.statusText}`)
+        // Don't expose detailed error messages
+        throw new Error(`Ollama请求失败: ${response.status}`)
       }
 
       const data: OllamaResponse = await response.json()
+      
+      // Validate response structure
+      if (!data?.message?.content) {
+        throw new Error("无效的响应格式")
+      }
+      
       return data.message.content
     } catch (error) {
-      console.error("Ollama聊天请求失败:", error)
+      // Log error without exposing sensitive details
+      if (error instanceof Error) {
+        console.error("Ollama聊天请求失败")
+        throw new Error("AI服务暂时不可用，请稍后重试")
+      }
       throw error
     }
   }
@@ -142,18 +172,31 @@ class OllamaService {
     return prompts[type]
   }
 
+  // Safely stringify data with size limits
+  private safeStringify(data: any, maxLength: number = 5000): string {
+    try {
+      const str = JSON.stringify(data, null, 2)
+      return str.length > maxLength ? str.substring(0, maxLength) + '...(truncated)' : str
+    } catch (error) {
+      return '[无法序列化的数据]'
+    }
+  }
+
   // 构建用户提示词
   private buildUserPrompt(request: AnalysisRequest): string {
     let prompt = `请分析以下业务数据：\n\n`
 
-    if (request.context) {
-      prompt += `背景信息：${request.context}\n\n`
+    if (request.context && typeof request.context === 'string') {
+      // Sanitize context to prevent injection
+      const sanitizedContext = request.context.substring(0, 1000)
+      prompt += `背景信息：${sanitizedContext}\n\n`
     }
 
-    prompt += `数据内容：\n${JSON.stringify(request.data, null, 2)}\n\n`
+    // Use safe stringify with size limits
+    prompt += `数据内容：\n${this.safeStringify(request.data, 5000)}\n\n`
 
     if (request.parameters) {
-      prompt += `分析参数：\n${JSON.stringify(request.parameters, null, 2)}\n\n`
+      prompt += `分析参数：\n${this.safeStringify(request.parameters, 1000)}\n\n`
     }
 
     prompt += `请提供详细的分析结果。`
@@ -163,12 +206,19 @@ class OllamaService {
 
   // 智能问答
   async askQuestion(question: string, context?: any): Promise<string> {
+    // Validate and sanitize question
+    if (!question || typeof question !== 'string') {
+      throw new Error("无效的问题")
+    }
+    
+    const sanitizedQuestion = question.substring(0, 2000)
+    
     const systemPrompt = `你是一个企业管理系统的AI助手。请回答用户关于业务管理的问题。
     回答要专业、准确、实用。如果涉及具体数据，请基于提供的上下文信息。回答请使用中文。`
 
-    let userPrompt = question
+    let userPrompt = sanitizedQuestion
     if (context) {
-      userPrompt += `\n\n相关上下文：\n${JSON.stringify(context, null, 2)}`
+      userPrompt += `\n\n相关上下文：\n${this.safeStringify(context, 2000)}`
     }
 
     const messages: ChatMessage[] = [

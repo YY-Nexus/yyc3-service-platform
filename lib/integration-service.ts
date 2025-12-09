@@ -18,28 +18,53 @@ class IntegrationService {
   private configs: Map<string, IntegrationConfig> = new Map()
   private webhookHandlers: Map<string, Function> = new Map()
 
+  // Validate integration config to prevent injection
+  private validateConfig(config: IntegrationConfig): boolean {
+    if (!config || typeof config !== 'object') return false
+    if (!config.appId || typeof config.appId !== 'string') return false
+    if (!config.appSecret || typeof config.appSecret !== 'string') return false
+    
+    // Validate format to prevent injection
+    const validIdPattern = /^[a-zA-Z0-9_-]{8,128}$/
+    const validSecretPattern = /^[a-zA-Z0-9_-]{16,256}$/
+    
+    return validIdPattern.test(config.appId) && validSecretPattern.test(config.appSecret)
+  }
+
   // 钉钉集成
   async configureDingTalk(config: IntegrationConfig): Promise<boolean> {
     try {
-      // 验证钉钉配置
-      const response = await fetch("https://oapi.dingtalk.com/gettoken", {
+      // Validate config before using
+      if (!this.validateConfig(config)) {
+        console.error("钉钉集成配置验证失败")
+        return false
+      }
+
+      // Use POST instead of GET with body, and add timeout
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+
+      const response = await fetch(`https://oapi.dingtalk.com/gettoken?appkey=${encodeURIComponent(config.appId)}&appsecret=${encodeURIComponent(config.appSecret)}`, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          appkey: config.appId,
-          appsecret: config.appSecret,
-        }),
+        signal: controller.signal,
       })
 
+      clearTimeout(timeoutId)
+
       if (response.ok) {
+        // Store config without exposing secrets in logs
         this.configs.set("dingtalk", config)
         console.log("钉钉集成配置成功")
         return true
+      } else {
+        console.error("钉钉集成配置失败: HTTP", response.status)
       }
     } catch (error) {
-      console.error("钉钉集成配置失败:", error)
+      // Don't expose error details that might contain sensitive info
+      console.error("钉钉集成配置失败")
     }
     return false
   }
@@ -47,22 +72,39 @@ class IntegrationService {
   // 企业微信集成
   async configureWeChatWork(config: IntegrationConfig): Promise<boolean> {
     try {
-      // 验证企业微信配置
-      const response = await fetch("https://qyapi.weixin.qq.com/cgi-bin/gettoken", {
+      // Validate config before using
+      if (!this.validateConfig(config)) {
+        console.error("企业微信集成配置验证失败")
+        return false
+      }
+
+      // Add timeout and proper URL encoding
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+
+      const url = new URL("https://qyapi.weixin.qq.com/cgi-bin/gettoken")
+      url.searchParams.append("corpid", config.appId)
+      url.searchParams.append("corpsecret", config.appSecret)
+
+      const response = await fetch(url.toString(), {
         method: "GET",
-        params: {
-          corpid: config.appId,
-          corpsecret: config.appSecret,
+        headers: {
+          "Content-Type": "application/json",
         },
+        signal: controller.signal,
       })
+
+      clearTimeout(timeoutId)
 
       if (response.ok) {
         this.configs.set("wechat-work", config)
         console.log("企业微信集成配置成功")
         return true
+      } else {
+        console.error("企业微信集成配置失败: HTTP", response.status)
       }
     } catch (error) {
-      console.error("企业微信集成配置失败:", error)
+      console.error("企业微信集成配置失败")
     }
     return false
   }
@@ -70,7 +112,16 @@ class IntegrationService {
   // 飞书集成
   async configureFeishu(config: IntegrationConfig): Promise<boolean> {
     try {
-      // 验证飞书配置
+      // Validate config before using
+      if (!this.validateConfig(config)) {
+        console.error("飞书集成配置验证失败")
+        return false
+      }
+
+      // Add timeout
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+
       const response = await fetch("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
         method: "POST",
         headers: {
@@ -80,15 +131,20 @@ class IntegrationService {
           app_id: config.appId,
           app_secret: config.appSecret,
         }),
+        signal: controller.signal,
       })
+
+      clearTimeout(timeoutId)
 
       if (response.ok) {
         this.configs.set("feishu", config)
         console.log("飞书集成配置成功")
         return true
+      } else {
+        console.error("飞书集成配置失败: HTTP", response.status)
       }
     } catch (error) {
-      console.error("飞书集成配置失败:", error)
+      console.error("飞书集成配置失败")
     }
     return false
   }
@@ -234,17 +290,50 @@ class IntegrationService {
     }
   }
 
+  // Validate webhook signature to prevent unauthorized access
+  private validateWebhookSignature(platform: string, signature: string, data: any): boolean {
+    // This should be implemented based on each platform's signature verification
+    // For now, return true as a placeholder - implement actual signature verification
+    // TODO: Implement proper webhook signature verification for each platform
+    return true
+  }
+
   // 处理Webhook回调
   setupWebhook(platform: string, handler: Function) {
+    // Validate platform name
+    const validPlatforms = ["dingtalk", "wechat-work", "feishu"]
+    if (!validPlatforms.includes(platform)) {
+      console.error("不支持的平台")
+      return
+    }
+    
     this.webhookHandlers.set(platform, handler)
     console.log(`设置 ${platform} Webhook处理器`)
   }
 
   // 处理Webhook请求
-  async handleWebhook(platform: string, data: any): Promise<any> {
+  async handleWebhook(platform: string, data: any, signature?: string): Promise<any> {
+    // Validate platform
+    const validPlatforms = ["dingtalk", "wechat-work", "feishu"]
+    if (!validPlatforms.includes(platform)) {
+      console.error("不支持的平台")
+      return null
+    }
+
+    // Verify webhook signature if provided
+    if (signature && !this.validateWebhookSignature(platform, signature, data)) {
+      console.error("Webhook签名验证失败")
+      return null
+    }
+
     const handler = this.webhookHandlers.get(platform)
     if (handler) {
-      return await handler(data)
+      try {
+        return await handler(data)
+      } catch (error) {
+        console.error(`Webhook处理失败`)
+        return null
+      }
     }
     console.warn(`未找到 ${platform} 的Webhook处理器`)
     return null

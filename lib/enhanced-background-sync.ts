@@ -187,17 +187,58 @@ class EnhancedBackgroundSyncManager {
     return { success, failure }
   }
 
+  // Validate endpoint to prevent SSRF
+  private validateEndpoint(endpoint: string): boolean {
+    try {
+      const url = new URL(endpoint, window.location.origin)
+      return url.origin === window.location.origin
+    } catch {
+      return false
+    }
+  }
+
+  // Sanitize headers
+  private sanitizeHeaders(headers?: Record<string, string>): Record<string, string> {
+    const sanitized: Record<string, string> = {}
+    if (!headers) return sanitized
+    
+    const allowedHeaders = ['Content-Type', 'Authorization', 'Accept']
+    for (const [key, value] of Object.entries(headers)) {
+      if (allowedHeaders.includes(key) && typeof value === 'string') {
+        sanitized[key] = value.replace(/[\r\n]/g, '')
+      }
+    }
+    return sanitized
+  }
+
   // 带冲突解决的同步操作
   private async syncActionWithConflictResolution(action: OfflineActionWithId): Promise<void> {
     const { endpoint, method, data, headers, module } = action
 
+    // Validate endpoint
+    if (!this.validateEndpoint(endpoint)) {
+      throw new Error("Invalid endpoint")
+    }
+
+    // Validate HTTP method
+    const allowedMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+    if (!allowedMethods.includes(method)) {
+      throw new Error("Invalid HTTP method")
+    }
+
+    const sanitizedHeaders = this.sanitizeHeaders(headers)
+
     try {
       // 对于更新操作，先获取服务器最新数据
       if (method === "PUT" || method === "PATCH") {
+        const controller1 = new AbortController()
+        const timeoutId1 = setTimeout(() => controller1.abort(), 10000)
+        
         const getResponse = await fetch(endpoint, {
           method: "GET",
-          headers: { "Content-Type": "application/json", ...headers },
-        })
+          headers: { "Content-Type": "application/json", ...sanitizedHeaders },
+          signal: controller1.signal,
+        }).finally(() => clearTimeout(timeoutId1))
 
         if (getResponse.ok) {
           const serverData = await getResponse.json()
@@ -206,7 +247,7 @@ class EnhancedBackgroundSyncManager {
           const conflicts = conflictResolver.detectConflicts(data, serverData, module)
 
           if (conflicts.length > 0) {
-            console.log(`检测到 ${conflicts.length} 个数据冲突`)
+            console.log(`检测到数据冲突`)
 
             // 解决冲突
             const resolution = await conflictResolver.resolveConflicts(conflicts, module)
@@ -223,22 +264,27 @@ class EnhancedBackgroundSyncManager {
             await offlineStorage.addSyncLog({
               action: `冲突解决: ${module}`,
               status: "success",
-              message: `使用 ${resolution.strategy} 策略解决了 ${conflicts.length} 个冲突`,
+              message: `冲突已解决`,
               details: { conflicts: conflicts.length, strategy: resolution.strategy },
             })
           }
         }
       }
 
+      // Add timeout for sync operation
+      const controller2 = new AbortController()
+      const timeoutId2 = setTimeout(() => controller2.abort(), 30000)
+
       // 执行同步操作
       const response = await fetch(endpoint, {
         method,
-        headers: { "Content-Type": "application/json", ...headers },
+        headers: { "Content-Type": "application/json", ...sanitizedHeaders },
         body: data ? JSON.stringify(data) : undefined,
-      })
+        signal: controller2.signal,
+      }).finally(() => clearTimeout(timeoutId2))
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(`HTTP ${response.status}`)
       }
 
       // 缓存响应数据
@@ -247,7 +293,7 @@ class EnhancedBackgroundSyncManager {
         await offlineStorage.cacheData(endpoint, responseData, module)
       }
     } catch (error) {
-      console.error(`同步操作失败 (ID: ${action.id}):`, error)
+      console.error(`同步操作失败`)
       throw error
     }
   }

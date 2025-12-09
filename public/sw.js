@@ -205,16 +205,37 @@ async function syncData() {
 
     for (const action of offlineActions) {
       try {
+        // Validate URL to prevent SSRF attacks
+        const url = new URL(action.url, self.location.origin)
+        if (url.origin !== self.location.origin) {
+          console.error("Invalid sync URL origin")
+          continue
+        }
+
+        // Validate HTTP method
+        const allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
+        if (!allowedMethods.includes(action.method)) {
+          console.error("Invalid HTTP method")
+          continue
+        }
+
+        // Add timeout to fetch
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 30000)
+
         await fetch(action.url, {
           method: action.method,
           headers: action.headers,
           body: action.body,
+          signal: controller.signal,
+        }).finally(() => {
+          clearTimeout(timeoutId)
         })
 
         // 同步成功，删除离线操作记录
         await removeOfflineAction(action.id)
       } catch (error) {
-        console.error("同步操作失败:", error)
+        console.error("同步操作失败")
       }
     }
 
