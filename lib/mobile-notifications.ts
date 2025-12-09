@@ -155,6 +155,19 @@ export class MobileNotificationService {
         })
       }
 
+      // Validate notification options before sending
+      const sanitizedOptions = {
+        title: typeof options.title === 'string' ? options.title.substring(0, 100) : '',
+        body: typeof options.body === 'string' ? options.body.substring(0, 500) : '',
+        icon: options.icon,
+        badge: options.badge,
+        tag: options.tag,
+      }
+
+      // Add timeout to prevent hanging requests
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 5000)
+
       // 发送到服务端
       await fetch("/api/push-notification", {
         method: "POST",
@@ -163,11 +176,14 @@ export class MobileNotificationService {
         },
         body: JSON.stringify({
           subscription,
-          notification: options,
+          notification: sanitizedOptions,
         }),
+        signal: controller.signal,
+      }).finally(() => {
+        clearTimeout(timeoutId)
       })
     } catch (error) {
-      console.error("发送推送通知失败:", error)
+      console.error("发送推送通知失败")
     }
   }
 

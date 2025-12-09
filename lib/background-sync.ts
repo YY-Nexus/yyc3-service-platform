@@ -142,27 +142,78 @@ class BackgroundSyncManager {
     }
   }
 
+  // Validate endpoint to prevent SSRF attacks
+  private validateEndpoint(endpoint: string): boolean {
+    try {
+      const url = new URL(endpoint, window.location.origin)
+      // Only allow same-origin or explicitly allowed domains
+      const allowedOrigins = [window.location.origin]
+      return allowedOrigins.includes(url.origin)
+    } catch {
+      return false
+    }
+  }
+
+  // Sanitize headers to prevent header injection
+  private sanitizeHeaders(headers?: Record<string, string>): Record<string, string> {
+    const sanitized: Record<string, string> = {}
+    if (!headers) return sanitized
+    
+    // Only allow safe headers
+    const allowedHeaders = ['Content-Type', 'Authorization', 'Accept']
+    for (const [key, value] of Object.entries(headers)) {
+      if (allowedHeaders.includes(key) && typeof value === 'string') {
+        // Remove any newline characters to prevent header injection
+        sanitized[key] = value.replace(/[\r\n]/g, '')
+      }
+    }
+    return sanitized
+  }
+
   // 同步单个操作
   private async syncAction(action: OfflineActionWithId): Promise<void> {
     const { endpoint, method, data, headers } = action
 
-    const response = await fetch(endpoint, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        ...headers,
-      },
-      body: data ? JSON.stringify(data) : undefined,
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    // Validate endpoint to prevent SSRF
+    if (!this.validateEndpoint(endpoint)) {
+      throw new Error("Invalid endpoint")
     }
 
-    // 如果是GET请求，缓存响应数据
-    if (method === "GET") {
-      const responseData = await response.json()
-      await offlineStorage.cacheData(endpoint, responseData, action.module)
+    // Validate HTTP method
+    const allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
+    if (!allowedMethods.includes(method)) {
+      throw new Error("Invalid HTTP method")
+    }
+
+    // Sanitize headers
+    const sanitizedHeaders = this.sanitizeHeaders(headers)
+
+    // Add timeout to prevent hanging requests
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 30000)
+
+    try {
+      const response = await fetch(endpoint, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...sanitizedHeaders,
+        },
+        body: data ? JSON.stringify(data) : undefined,
+        signal: controller.signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      // 如果是GET请求，缓存响应数据
+      if (method === "GET") {
+        const responseData = await response.json()
+        await offlineStorage.cacheData(endpoint, responseData, action.module)
+      }
+    } finally {
+      clearTimeout(timeoutId)
     }
   }
 

@@ -67,6 +67,14 @@ const ChartContainer = React.forwardRef<
 })
 ChartContainer.displayName = 'Chart'
 
+// Sanitize CSS color values to prevent XSS
+const sanitizeCSSColor = (color: string | undefined): string | null => {
+  if (!color) return null
+  // Only allow valid CSS color formats: hex, rgb, rgba, hsl, hsla, and named colors
+  const validColorPattern = /^(#[0-9A-Fa-f]{3,8}|rgb\([^)]+\)|rgba\([^)]+\)|hsl\([^)]+\)|hsla\([^)]+\)|[a-z]+)$/i
+  return validColorPattern.test(color.trim()) ? color.trim() : null
+}
+
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   const colorConfig = Object.entries(config).filter(
     ([_, config]) => config.theme || config.color,
@@ -76,23 +84,34 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null
   }
 
+  // Sanitize the chart ID to prevent CSS injection
+  const sanitizedId = id.replace(/[^a-zA-Z0-9-_]/g, '')
+
   return (
     <style
       dangerouslySetInnerHTML={{
         __html: Object.entries(THEMES)
           .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
-${colorConfig
-  .map(([key, itemConfig]) => {
-    const color =
-      itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
-      itemConfig.color
-    return color ? `  --color-${key}: ${color};` : null
-  })
-  .join('\n')}
+            ([theme, prefix]) => {
+              const cssRules = colorConfig
+                .map(([key, itemConfig]) => {
+                  const rawColor =
+                    itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
+                    itemConfig.color
+                  const color = sanitizeCSSColor(rawColor)
+                  // Sanitize key to prevent CSS injection
+                  const sanitizedKey = key.replace(/[^a-zA-Z0-9-_]/g, '')
+                  return color ? `  --color-${sanitizedKey}: ${color};` : null
+                })
+                .filter(Boolean)
+                .join('\n')
+              
+              return `
+${prefix} [data-chart=${sanitizedId}] {
+${cssRules}
 }
-`,
+`
+            }
           )
           .join('\n'),
       }}

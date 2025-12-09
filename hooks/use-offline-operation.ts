@@ -14,6 +14,30 @@ export function useOfflineOperation(options: UseOfflineOperationOptions) {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
+  // Validate endpoint to prevent SSRF
+  const validateEndpoint = useCallback((endpoint: string): boolean => {
+    try {
+      const url = new URL(endpoint, window.location.origin)
+      return url.origin === window.location.origin
+    } catch {
+      return false
+    }
+  }, [])
+
+  // Sanitize headers to prevent injection
+  const sanitizeHeaders = useCallback((headers?: Record<string, string>): Record<string, string> => {
+    const sanitized: Record<string, string> = {}
+    if (!headers) return sanitized
+    
+    const allowedHeaders = ['Content-Type', 'Authorization', 'Accept', 'X-CSRF-Token']
+    for (const [key, value] of Object.entries(headers)) {
+      if (allowedHeaders.includes(key) && typeof value === 'string') {
+        sanitized[key] = value.replace(/[\r\n]/g, '')
+      }
+    }
+    return sanitized
+  }, [])
+
   const executeOperation = useCallback(
     async (
       endpoint: string,
@@ -24,20 +48,38 @@ export function useOfflineOperation(options: UseOfflineOperationOptions) {
       setIsLoading(true)
       setError(null)
 
+      // Validate endpoint
+      if (!validateEndpoint(endpoint)) {
+        const error = new Error("Invalid endpoint")
+        setError(error)
+        options.onError?.(error)
+        throw error
+      }
+
+      // Sanitize headers
+      const sanitizedHeaders = sanitizeHeaders(headers)
+
       try {
         if (navigator.onLine) {
+          // Add timeout to prevent hanging requests
+          const controller = new AbortController()
+          const timeoutId = setTimeout(() => controller.abort(), 30000)
+
           // 在线时直接执行
           const response = await fetch(endpoint, {
             method,
             headers: {
               "Content-Type": "application/json",
-              ...headers,
+              ...sanitizedHeaders,
             },
             body: data ? JSON.stringify(data) : undefined,
+            signal: controller.signal,
+          }).finally(() => {
+            clearTimeout(timeoutId)
           })
 
           if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+            throw new Error(`HTTP ${response.status}`)
           }
 
           const result = await response.json()
@@ -51,14 +93,14 @@ export function useOfflineOperation(options: UseOfflineOperationOptions) {
             endpoint,
             method,
             data,
-            headers,
+            headers: sanitizedHeaders,
           })
 
           options.onOfflineQueued?.(actionId)
           return { offline: true, actionId }
         }
       } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err))
+        const error = err instanceof Error ? err : new Error("操作失败")
         setError(error)
         options.onError?.(error)
         throw error
@@ -66,7 +108,7 @@ export function useOfflineOperation(options: UseOfflineOperationOptions) {
         setIsLoading(false)
       }
     },
-    [options],
+    [options, validateEndpoint, sanitizeHeaders],
   )
 
   return {
