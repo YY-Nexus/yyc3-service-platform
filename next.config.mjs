@@ -101,6 +101,9 @@ const nextConfig = {
           },
           {
             key: 'Content-Security-Policy',
+            // Note: 'unsafe-inline' and 'unsafe-eval' reduce security but are needed for Next.js/React
+            // In production, consider using nonces or moving to stricter CSP with next/script
+            // TODO: Implement CSP nonces for better security
             value: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https://oapi.dingtalk.com https://qyapi.weixin.qq.com https://open.feishu.cn; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
           },
         ],

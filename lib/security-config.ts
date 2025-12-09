@@ -88,15 +88,30 @@ export const csrfTokenManager = new CSRFTokenManager()
 export class InputSanitizer {
   // Sanitize HTML to prevent XSS
   static sanitizeHTML(input: string): string {
+    // Check if running in browser environment
+    if (typeof document === 'undefined') {
+      // In server-side environment, use simple string escaping
+      return input
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;')
+        .replace(/\//g, '&#x2F;')
+    }
+    
+    // In browser environment, use DOM API
     const div = document.createElement('div')
     div.textContent = input
     return div.innerHTML
   }
 
   // Sanitize URL to prevent injection
-  static sanitizeURL(url: string): string | null {
+  static sanitizeURL(url: string, baseURL?: string): string | null {
     try {
-      const parsed = new URL(url, window.location.origin)
+      // Check if running in browser environment
+      const base = baseURL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost')
+      const parsed = new URL(url, base)
       // Only allow http and https protocols
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return null
@@ -107,9 +122,10 @@ export class InputSanitizer {
     }
   }
 
-  // Sanitize string for SQL-like queries (remove special characters)
+  // Sanitize string for SQL-like queries (remove dangerous special characters)
+  // Allows alphanumeric, spaces, hyphens, underscores, and dots
   static sanitizeQueryString(input: string): string {
-    return input.replace(/[^\w\s-]/gi, '')
+    return input.replace(/[^\w\s\-\.]/gi, '')
   }
 
   // Validate email format
@@ -182,6 +198,9 @@ export class RateLimiter {
 export const apiRateLimiter = new RateLimiter(60000, 100) // 100 requests per minute
 
 // Secure storage utilities
+// WARNING: This provides basic obfuscation only, NOT encryption
+// Do NOT use for storing sensitive data like passwords, tokens, or personal information
+// For sensitive data, use server-side storage or proper encryption libraries
 export class SecureStorage {
   // Check if storage is available
   private static isStorageAvailable(type: 'localStorage' | 'sessionStorage'): boolean {
@@ -196,7 +215,9 @@ export class SecureStorage {
     }
   }
 
-  // Store data securely (with base64 encoding as basic obfuscation)
+  // Store data with basic obfuscation (NOT secure encryption)
+  // WARNING: This only provides basic obfuscation, not real security
+  // Use only for non-sensitive data or preferences
   static setItem(key: string, value: string, useSession: boolean = false): boolean {
     const storageType = useSession ? 'sessionStorage' : 'localStorage'
     
@@ -206,7 +227,7 @@ export class SecureStorage {
     }
 
     try {
-      // Basic obfuscation (not encryption, but better than plain text)
+      // Basic obfuscation using base64 (not encryption, just harder to read)
       const encoded = btoa(encodeURIComponent(value))
       window[storageType].setItem(key, encoded)
       return true

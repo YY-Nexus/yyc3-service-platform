@@ -92,22 +92,26 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
       dangerouslySetInnerHTML={{
         __html: Object.entries(THEMES)
           .map(
-            ([theme, prefix]) => `
+            ([theme, prefix]) => {
+              const cssRules = colorConfig
+                .map(([key, itemConfig]) => {
+                  const rawColor =
+                    itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
+                    itemConfig.color
+                  const color = sanitizeCSSColor(rawColor)
+                  // Sanitize key to prevent CSS injection
+                  const sanitizedKey = key.replace(/[^a-zA-Z0-9-_]/g, '')
+                  return color ? `  --color-${sanitizedKey}: ${color};` : null
+                })
+                .filter(Boolean)
+                .join('\n')
+              
+              return `
 ${prefix} [data-chart=${sanitizedId}] {
-${colorConfig
-  .map(([key, itemConfig]) => {
-    const rawColor =
-      itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
-      itemConfig.color
-    const color = sanitizeCSSColor(rawColor)
-    // Sanitize key to prevent CSS injection
-    const sanitizedKey = key.replace(/[^a-zA-Z0-9-_]/g, '')
-    return color ? `  --color-${sanitizedKey}: ${color};` : null
-  })
-  .filter(Boolean)
-  .join('\n')}
+${cssRules}
 }
-`,
+`
+            }
           )
           .join('\n'),
       }}
